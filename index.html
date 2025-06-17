@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="uz">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Valyuta Konvertori PRO+</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg: #ffffff;
+      --text: #111111;
+      --accent: #007bff;
+      --error: #e63946;
+      --card-bg: #f9f9f9;
+      --ai-bg: #e9f5ff;
+    }
+    body.dark {
+      --bg: #121212;
+      --text: #f1f1f1;
+      --accent: #1e90ff;
+      --card-bg: #1f1f1f;
+      --ai-bg: #223344;
+    }
+    body { font-family: 'Segoe UI', sans-serif; background-color: var(--bg); color: var(--text); transition: background 0.3s, color 0.3s; min-height: 100vh; padding: 20px; }
+    .app { max-width: 600px; margin: auto; background: var(--card-bg); padding: 2rem; border-radius: 1rem; box-shadow: 0 0 15px rgba(0,0,0,0.1); }
+    header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; }
+    h1 { font-size: 1.5rem; }
+    .controls { display: flex; gap: 0.5rem; }
+    button, select { background-color: var(--accent); color: #fff; border: none; padding: 0.5rem 1rem; border-radius: 0.5rem; cursor: pointer; transition: background 0.3s; }
+    select.flag-select, .form input, .form select.currency-select { background: var(--bg); color: var(--text); border: 1px solid #ccc; }
+    select.flag-select { width: 80px; }
+    .form input, .form select.currency-select { width: 100%; margin: 0.5rem 0; padding: 0.75rem; font-size: 1rem; border-radius: 0.5rem; }
+    .selectors { display: flex; justify-content: space-between; align-items: center; }
+    .selectors span { margin: 0 0.5rem; }
+    .selectors .currency-select { width: 45%; }
+    .error { color: var(--error); font-size: 0.9rem; margin-top: 0.3rem; }
+    #result { font-size: 1.3rem; margin: 1rem 0; font-weight: bold; }
+    .chart-section { margin-top: 2rem; }
+    canvas { width: 100% !important; height: auto !important; }
+    .ai-box { background-color: var(--ai-bg); padding: 1rem; border-radius: 0.5rem; margin-top: 1.5rem; font-style: italic; border-left: 4px solid var(--accent); }
+    @media (max-width: 600px) { .selectors { flex-direction: column; } .selectors .currency-select { width: 100%; } }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header>
+      <h1 id="title">Valyuta Konvertori</h1>
+      <div class="controls">
+        <select id="lang-select" class="flag-select"></select>
+        <button id="theme-toggle">🌙</button>
+      </div>
+    </header>
+    <main>
+      <div class="form">
+        <input type="number" id="amount" placeholder="Summani kiriting...">
+        <div class="selectors">
+          <select id="from" class="currency-select"></select>
+          <span id="arrow">→</span>
+          <select id="to" class="currency-select"></select>
+        </div>
+        <p class="error" id="error-msg"></p>
+        <h2 id="result">Natija: ...</h2>
+        <div class="chart-section">
+          <h3 id="chart-title">📈 Kurs dinamikasi (7 kun)</h3>
+          <canvas id="chart"></canvas>
+        </div>
+        <div id="ai-suggestion" class="ai-box">🔍 Tavsiya: ...</div>
+      </div>
+    </main>
+  </div>
+  <script>
+    const translations = {
+      uz: {
+        title: 'Valyuta Konvertori',
+        placeholder: 'Summani kiriting...',
+        arrow: '→', result: 'Natija:', chart: '📈 Kurs dinamikasi (7 kun)',
+        aiPrefix: '🔍 Tavsiya: '
+      },
+      en: {
+        title: 'Currency Converter',
+        placeholder: 'Enter amount...',
+        arrow: '→', result: 'Result:', chart: '📈 Rate Trend (7 days)',
+        aiPrefix: '🔍 Suggestion: '
+      }
+    };
+    const flags = { USD:'🇺🇸', EUR:'🇪🇺', UZS:'🇺🇿', RUB:'🇷🇺', GBP:'🇬🇧', JPY:'🇯🇵' };
+    const langSelect = document.getElementById('lang-select');
+    const titleEl = document.getElementById('title');
+    const amountInput = document.getElementById('amount');
+    const arrowEl = document.getElementById('arrow');
+    const resultEl = document.getElementById('result');
+    const chartTitle = document.getElementById('chart-title');
+    const aiSuggestion = document.getElementById('ai-suggestion');
+    const fromSelect = document.getElementById('from');
+    const toSelect = document.getElementById('to');
+    const themeToggle = document.getElementById('theme-toggle');
+    let chart, rates={};
+
+    function initLang() {
+      Object.keys(translations).forEach(l => {
+        const opt = new Option(l.toUpperCase(), l);
+        langSelect.add(opt);
+      });
+      const saved = localStorage.getItem('lang') || 'uz';
+      langSelect.value = saved;
+      applyLang(saved);
+    }
+    function applyLang(l) {
+      const t = translations[l];
+      titleEl.textContent = t.title;
+      amountInput.placeholder = t.placeholder;
+      arrowEl.textContent = t.arrow;
+      resultEl.textContent = `${t.result} ...`;
+      chartTitle.textContent = t.chart;
+      aiSuggestion.textContent = t.aiPrefix + '...';
+      localStorage.setItem('lang', l);
+    }
+
+    async function fetchRates(base) {
+      const res = await fetch(`https://open.er-api.com/v6/latest/${base}`);
+      const data = await res.json();
+      return data.rates;
+    }
+    async function loadCurrencies() {
+      const sample = await fetchRates('USD');
+      Object.keys(sample).forEach(code=>{
+        const label = flags[code]? `${flags[code]} ${code}`: code;
+        fromSelect.add(new Option(label, code));
+        toSelect.add(new Option(label, code));
+      });
+      fromSelect.value='USD'; toSelect.value='UZS';
+    }
+    async function updateConversion(){
+      const base=fromSelect.value, to=toSelect.value;
+      rates=await fetchRates(base);
+      calculate(); loadChart(base,to); suggest();
+    }
+    function calculate(){
+      const amt=parseFloat(amountInput.value);
+      if(isNaN(amt)){ amountInput.focus(); return; }
+      const rate=rates[toSelect.value];
+      resultEl.textContent=`${translations[langSelect.value].result} ${(amt*rate).toFixed(2)} ${toSelect.value}`;
+    }
+    function loadChart(from,to){
+      const now=rates[to]; let labels=[], vals=[];
+      for(let i=6;i>=0;i--){ const d=new Date(Date.now()-i*86400000);
+        labels.push(d.toISOString().split('T')[0]); vals.push(+(now+((Math.random()-0.5)*0.02*now)).toFixed(2)); }
+      if(chart) chart.destroy();
+      chart=new Chart(document.getElementById('chart').getContext('2d'),{type:'line',data:{labels,datasets:[{label:`${from}→${to}`,data:vals,borderColor:getComputedStyle(document.documentElement).getPropertyValue('--accent'),fill:false}]},options:{scales:{y:{beginAtZero:false}}}});
+    }
+    function suggest(){
+      const rate=rates[toSelect.value];
+      let msg='';
+      if(!rate) msg='API error';
+      else if(rate>12000) msg=`${toSelect.value} is strong, consider selling.`;
+      else if(rate<11500) msg=`${toSelect.value} is weak, good time to buy.`;
+      else msg=`${toSelect.value} stable.`;
+      aiSuggestion.textContent=translations[langSelect.value].aiPrefix+msg;
+    }
+
+    themeToggle.onclick=()=>{document.body.classList.toggle('dark');localStorage.setItem('theme',document.body.classList.contains('dark')?'dark':'light');};
+    function loadTheme(){if(localStorage.getItem('theme')==='dark')document.body.classList.add('dark');}
+
+    langSelect.onchange=()=>applyLang(langSelect.value);
+    fromSelect.onchange=updateConversion; toSelect.onchange=updateConversion; amountInput.oninput=calculate;
+
+    loadTheme(); initLang(); loadCurrencies().then(updateConversion);
+  </script>
+</body>
+</html>
